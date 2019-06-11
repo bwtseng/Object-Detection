@@ -1,4 +1,4 @@
 # Object-detection
-** Some Model
+## *Some Model*
 - Faster RCNN
 -
