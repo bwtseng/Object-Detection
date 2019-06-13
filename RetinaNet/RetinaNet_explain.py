@@ -185,6 +185,7 @@ class RetinaNet:
 			pred7r = self._regression_subnet(p7, 256)
 
 			if self.data_format == 'channels_first':
+
 				pred3c = tf.transpose(pred3c, [0, 2, 3, 1])
 				pred3r = tf.transpose(pred3r, [0, 2, 3, 1])
 				pred4c = tf.transpose(pred4c, [0, 2, 3, 1])
@@ -203,6 +204,7 @@ class RetinaNet:
 			p7shape = tf.shape(pred7c)
 
 		with tf.variable_scope('inference'):
+
 			p3bbox_yx, p3bbox_hw, p3conf = self._get_pbbox(pred3c, pred3r)
 			p4bbox_yx, p4bbox_hw, p4conf = self._get_pbbox(pred4c, pred4r)
 			p5bbox_yx, p5bbox_hw, p5conf = self._get_pbbox(pred5c, pred5r)
@@ -427,7 +429,6 @@ class RetinaNet:
 
 		ashape = tf.shape(abbox_hwti)
 		gshape = tf.shape(gbbox_hwti)
-
 		### Copy for times to compute the area of this box.
 		### for same bounding box amounts.
 		abbox_hwti = tf.tile(abbox_hwti, [gshape[0], 1, 1])
@@ -441,6 +442,7 @@ class RetinaNet:
    
 		### Compute ios following below code.
 		### iou formula: Area / Area1+ Area2 - Area
+		### Good code.
 		gaiou_y1x1ti = tf.maximum(abbox_y1x1ti, gbbox_y1x1ti)
 		gaiou_y2x2ti = tf.minimum(abbox_y2x2ti, gbbox_y2x2ti)
 		## 算長寬高, 並計算面積.
@@ -449,8 +451,8 @@ class RetinaNet:
 		garea = tf.reduce_prod(gbbox_hwti, axis=-1)
 		gaiou_rate = gaiou_area / (aarea + garea - gaiou_area)
 
-		### Choose maximum iou and use its as the best bounging box (anchor).
-		best_raindex = tf.argmax(gaiou_rate, axis=1)
+		### Choose the anchor box which has the maximum IoU corresponding to the bbox.
+		best_raindex = tf.argmax(gaiou_rate, axis=1)  ### It return a/an list/array.
 		best_pbbox_yx = tf.gather(pbbox_yx, best_raindex)
 		best_pbbox_hw = tf.gather(pbbox_hw, best_raindex)
 		best_pconf = tf.gather(pconf, best_raindex)
@@ -458,27 +460,32 @@ class RetinaNet:
 		best_abbox_hw = tf.gather(abbox_hw, best_raindex)
 
 
-		### I don't know what this code aims for?
-		bestmask, _ = tf.unique(best_raindex)
-		bestmask = tf.contrib.framework.sort(bestmask)
+		### assign the one label to the best anchor, and the other mark as worse one.
+		### Choose the better anchors with different bounding boxes.
+		### From the papaer faster RCNN page 5~~~~~
+		bestmask, _ = tf.unique(best_raindex) 
+		bestmask = tf.contrib.framework.sort(bestmask) ## make the list in order.
 		bestmask = tf.reshape(bestmask, [-1, 1])
 		bestmask = tf.sparse.SparseTensor(tf.concat([bestmask, tf.zeros_like(bestmask)], axis=-1),
 										  tf.squeeze(tf.ones_like(bestmask)), dense_shape=[ashape[1], 1])
 		bestmask = tf.reshape(tf.cast(tf.sparse.to_dense(bestmask), tf.float32), [-1])
+		### 1 ----> 0
 
+		### select the anchors from the worse group (other)
 		othermask = 1. - bestmask
 		othermask = othermask > 0.
 		other_pbbox_yx = tf.boolean_mask(pbbox_yx, othermask)
 		other_pbbox_hw = tf.boolean_mask(pbbox_hw, othermask)
 		other_pconf = tf.boolean_mask(pconf, othermask)
-
 		other_abbox_yx = tf.boolean_mask(abbox_yx, othermask)
 		other_abbox_hw = tf.boolean_mask(abbox_hw, othermask)
 
 		### 0.4 - 0.5 may not a good bbox.
 		agiou_rate = tf.transpose(gaiou_rate)
+		### Sample other's anchor box.
 		other_agiou_rate = tf.boolean_mask(agiou_rate, othermask)
-		best_agiou_rate = tf.reduce_max(other_agiou_rate, axis=1)
+		### Best iou for the other anchors.
+		best_agiou_rate = tf.reduce_max(other_agiou_rate, axis=1) ## return value rather than index.
 		pos_agiou_mask = best_agiou_rate > 0.5
 		neg_agiou_mask = best_agiou_rate < 0.4
 		rgindex = tf.argmax(other_agiou_rate, axis=1)
@@ -489,6 +496,7 @@ class RetinaNet:
 		pos_pconf = tf.boolean_mask(other_pconf, pos_agiou_mask)
 		pos_abbox_yx = tf.boolean_mask(other_abbox_yx, pos_agiou_mask)
 		pos_abbox_hw = tf.boolean_mask(other_abbox_hw, pos_agiou_mask)
+
 		pos_label = tf.gather(label, pos_rgindex)
 		pos_gbbox_yx = tf.gather(gbbox_yx, pos_rgindex)
 		pos_gbbox_hw = tf.gather(gbbox_hw, pos_rgindex)
@@ -534,6 +542,7 @@ class RetinaNet:
 			tf.expand_dims(tf.range(0, tf.shape(negprob)[0], dtype=tf.int32), axis=-1),
 			tf.reshape(neglabel, [-1, 1])
 		], axis=-1)
+		## gather_nd means that sample its log probability.
 		posprob = tf.clip_by_value(tf.gather_nd(posprob, pos_index), 1e-8, 1.)
 		negprob = tf.clip_by_value(tf.gather_nd(negprob, neg_index), 1e-8, 1.)
 		posloss = - self.alpha * tf.pow(1. - posprob, self.gamma) * tf.log(posprob)
